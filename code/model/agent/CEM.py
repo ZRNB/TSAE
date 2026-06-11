@@ -128,6 +128,6 @@ class CEM(BaseRLAgent):
         torch.save({'mu': self.actor.mu, 'var': self.actor.var}, self.save_path + "_stat")
     
     def load(self):
-        checkpoint = torch.load(self.save_path + "_stat", map_location=self.device)
+        checkpoint = torch.load(self.save_path + "_stat", map_location=self.device, weights_only=False)
         self.actor.mu = checkpoint['mu']
         self.actor.var = checkpoint['var']

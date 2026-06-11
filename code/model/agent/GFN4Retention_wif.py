@@ -48,7 +48,7 @@ class GFN4Retention_wif(BaseRLAgent):
         parser.add_argument('--gfn_backward_offset', type=float, default=1.0, 
                             help='smooth offset of backward logp of TB loss') #b_b
         
-        parser.add_argument('--gfn_reward_smooth', type=float, default=1.0, 
+        parser.add_argument('--gfn_reward_smooth', type=float, default=0.5, 
                             help='reward smooth offset in the backward part of TB loss') #b_r 0.5
         
         parser.add_argument('--gfn_Z', type=float, default=0.1, 
@@ -244,8 +244,8 @@ class GFN4Retention_wif(BaseRLAgent):
         done_mask = done_mask.to(torch.float)
         
         #critic_loss_list, actor_loss = self.get_gfn_loss(observation, policy_output, user_feedback, done_mask, next_observation)
-        loss = self.get_gfn_loss(observation, policy_output, user_feedback, done_mask, next_observation)
-        
+        loss, discrepancy = self.get_gfn_loss(observation, policy_output, user_feedback, done_mask, next_observation)
+        print('discrepancy: ', discrepancy, 'discrepancy.shape: ', discrepancy.shape)
         self.training_history['actor_loss'].append(loss.item())
         self.training_history['Q1_loss'].append(0)
         self.training_history['Q2_loss'].append(0)
@@ -282,30 +282,38 @@ class GFN4Retention_wif(BaseRLAgent):
 
         # Calculate flow, forward prob, backward prob for current and next states
         current_flow_output = self.get_flow(current_policy_output)
-        log_F_t = current_flow_output['log_f']
+        log_F_t = current_flow_output['log_f'] # torch.size([128])
+        print('log_F_t: ', log_F_t, 'log_F_t.shape: ', log_F_t.shape)
 
         forward_output = self.get_forward_prob(observation)
         P_F = forward_output['prob_f']
-        log_P_F = torch.log(P_F + b_f)
+        log_P_F = torch.log(P_F + b_f) # torch.size([128, 1])
+        print('log_P_F: ', log_P_F, 'log_P_F.shape: ', log_P_F.shape)
 
         next_flow_output = self.get_flow(next_policy_output)
-        log_F_next = next_flow_output['log_f']
+        log_F_next = next_flow_output['log_f'] # torch.size([128])
+        print('log_F_next: ', log_F_next, 'log_F_next.shape: ', log_F_next.shape)
 
         backward_output = self.get_backward_prob(current_policy_output, next_policy_output)
         P_B = backward_output['prob_b']
-        log_P_B = torch.log(P_B + b_b)
+        log_P_B = torch.log(P_B + b_b) # torch.size([128, 1])
+        print('log_P_B: ', log_P_B, 'log_P_B.shape: ', log_P_B.shape)
 
         # Calculate reward components and loss components
         trajectory_reward = user_feedback['reward'].view(-1, 1) + 0.001
-        log_reward = torch.log(trajectory_reward + b_r)
+        log_reward = torch.log(trajectory_reward + b_r) # torch.size([128, 1])
+        print('log_reward: ', log_reward, 'log_reward.shape: ', log_reward.shape)
 
-        DB_forward_terminal = log_F_t
-        DB_forward_nonterminal = log_F_t + log_P_F
+        DB_forward_terminal = log_F_t # torch.size([128])
+        DB_forward_nonterminal = log_F_t + log_P_F # torch.size([128, 128])
+        print('DB_forward_terminal: ', DB_forward_terminal, 'DB_forward_terminal.shape: ', DB_forward_terminal.shape)
+        print('DB_forward_nonterminal: ', DB_forward_nonterminal, 'DB_forward_nonterminal.shape: ', DB_forward_nonterminal.shape)
         DB_forward = DB_forward_terminal * done_mask * tn_balance + \
-                     DB_forward_nonterminal * (1 - done_mask) * (1 - tn_balance)
+                     DB_forward_nonterminal * (1 - done_mask) * (1 - tn_balance) # torch.size([128, 128])
+        print('DB_forward: ', DB_forward, 'DB_forward.shape: ', DB_forward.shape)
 
         DB_backward_terminal = log_reward
-        
+        print('DB_backward_terminal: ', DB_backward_terminal, 'DB_backward_terminal.shape: ', DB_backward_terminal.shape)
         # Without immediate feedback
         # DB_backward_nonterminal = log_F_next + log_P_B
         # With immediate feedback
@@ -314,15 +322,17 @@ class GFN4Retention_wif(BaseRLAgent):
         user_feedback['immediate_response_weight'] = self.env.response_weights
         point_reward = user_feedback['immediate_response'].reshape(-1, 6, 7) * user_feedback['immediate_response_weight'].view(1,1,-1)
         combined_reward = torch.sum(point_reward, dim = 2)
-        immediate_reward = torch.mean(combined_reward, dim = 1)
-
-        DB_backward_nonterminal = log_F_next + log_P_B + torch.pow(immediate_reward, zzz)
-        
+        immediate_reward = torch.mean(combined_reward, dim = 1) # torch.size([128])
+        print('immediate_reward: ', immediate_reward, 'immediate_reward.shape: ', immediate_reward.shape)
+        # DB_backward_nonterminal = log_F_next + log_P_B + torch.pow(immediate_reward, zzz)
+        DB_backward_nonterminal = log_F_next + log_P_B + torch.mul(immediate_reward, zzz) # torch.size([128, 128])
+        print('DB_backward_nonterminal: ', DB_backward_nonterminal, 'DB_backward_nonterminal.shape: ', DB_backward_nonterminal.shape)
         DB_backward = DB_backward_terminal * done_mask * tn_balance + \
-                      DB_backward_nonterminal * (1 - done_mask) * (1 - tn_balance)
-
+                      DB_backward_nonterminal * (1 - done_mask) * (1 - tn_balance) # torch.size([128, 128])
+        print('DB_backward: ', DB_backward, 'DB_backward.shape: ', DB_backward.shape)
         # Calculate the final GFN DB loss
         gfn_db_diff = DB_forward - DB_backward + b_z
+        print('gfn_db_diff: ', gfn_db_diff, 'gfn_db_diff.shape: ', gfn_db_diff.shape)
         gfn_db_loss = torch.mean(torch.square(gfn_db_diff))
 
         # Calculate the total loss
@@ -346,7 +356,7 @@ class GFN4Retention_wif(BaseRLAgent):
         #self.scheduler2.step()
         #self.scheduler3.step()
 
-        return total_loss
+        return total_loss, gfn_db_diff
 
 
     

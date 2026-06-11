@@ -114,8 +114,7 @@ class CrossSessionBuffer(BaseBuffer):
         B = len(user_feedback['reward'])
         if self.buffer_head + B >= self.buffer_size:
             tail = self.buffer_size - self.buffer_head
-            indices = [self.buffer_head + i for i in range(tail)] + \
-                        [i for i in range(B - tail)]
+            indices = [self.buffer_head + i for i in range(tail)] + [i for i in range(B - tail)]
         else:
             indices = [self.buffer_head + i for i in range(B)]
         indices = torch.tensor(indices).to(torch.long).to(self.device)

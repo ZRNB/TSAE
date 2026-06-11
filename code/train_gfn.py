@@ -24,7 +24,6 @@ import utils
 
 if __name__ == '__main__':
     
-    # initial args
     init_parser = argparse.ArgumentParser()
     init_parser.add_argument('--env_class', type=str, required=True, help='Environment class.')
     init_parser.add_argument('--policy_class', type=str, required=True, help='Policy class')
